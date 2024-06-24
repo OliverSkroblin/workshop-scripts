@@ -27,23 +27,29 @@ class CategoryLoader
     {
     }
 
-    public function load(): EntityCollection
+    public function load(): array
     {
         $criteria = new Criteria();
         $criteria->addAssociation('media');
         $criteria->addSorting(new CountSorting('products.id', FieldSorting::DESCENDING));
 
-        $categories = $this->container
+        $ids = $this->container
             ->get('category.repository')
-            ->search($criteria, Context::createCLIContext())
-            ->getEntities();
+            ->searchIds($criteria, Context::createCLIContext());
 
         $loader = new MetaLoader($this->container);
 
-        foreach ($categories as $category) {
+        $categories = [];
+        foreach ($ids->getIds() as $id) {
+            $category = $this->container->get('category.repository')
+                ->search(new Criteria([$id]), Context::createCLIContext())
+                ->first();
+
             $category->addArrayExtension('meta', [
                 'products' => $loader->products($category->getId()),
             ]);
+
+            $categories[] = $category;
         }
 
         return $categories;
@@ -74,7 +80,7 @@ class Main extends BaseScript
 
         $categories = (new CategoryLoader($this->container))->load();
 
-        $categories = array_slice($categories->getElements(), 0, 20);
+        $categories = array_slice($categories, 0, 20);
 
         $output = new SymfonyStyle(new ArrayInput([]), new ConsoleOutput());
 

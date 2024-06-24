@@ -23,7 +23,7 @@ class Main extends BaseScript
     public function run()
     {
         $ids = $this->getContainer()->get(Connection::class)
-            ->fetchFirstColumn('SELECT LOWER(HEX(id)) FROM product LIMIT 50');
+            ->fetchFirstColumn('SELECT LOWER(HEX(id)) FROM product LIMIT 15');
 
         // all services are public in script mode
         $service = $this->getContainer()->get(CartService::class);

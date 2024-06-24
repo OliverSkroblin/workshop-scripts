@@ -3,15 +3,17 @@
 namespace Scripts\Examples;
 
 use Doctrine\DBAL\Connection;
+use Shopware\Core\Content\Category\CategoryEntity;
 use Shopware\Core\Framework\Context;
-use Shopware\Core\Framework\DataAbstractionLayer\Entity;
 use Shopware\Core\Framework\DataAbstractionLayer\EntityCollection;
 use Shopware\Core\Framework\DataAbstractionLayer\Search\Criteria;
-use Shopware\Core\Framework\DataAbstractionLayer\Search\Filter\EqualsFilter;
+use Shopware\Core\Framework\DataAbstractionLayer\Search\Sorting\CountSorting;
+use Shopware\Core\Framework\DataAbstractionLayer\Search\Sorting\FieldSorting;
 use Shopware\Core\Framework\Uuid\Uuid;
 use Symfony\Component\Console\Input\ArrayInput;
 use Symfony\Component\Console\Output\ConsoleOutput;
 use Symfony\Component\Console\Style\SymfonyStyle;
+use Symfony\Component\DependencyInjection\Container;
 
 require_once __DIR__ . '/../examples/base-script.php';
 
@@ -19,42 +21,72 @@ $env = 'prod'; // by default, kernel gets booted in dev
 
 $kernel = require __DIR__ . '/../boot/boot.php';
 
+class CategoryLoader
+{
+    public function __construct(private readonly Container $container)
+    {
+    }
+
+    public function load(): EntityCollection
+    {
+        $criteria = new Criteria();
+        $criteria->addAssociation('media');
+        $criteria->addSorting(new CountSorting('products.id', FieldSorting::DESCENDING));
+
+        $categories = $this->container
+            ->get('category.repository')
+            ->search($criteria, Context::createCLIContext())
+            ->getEntities();
+
+        $loader = new MetaLoader($this->container);
+
+        foreach ($categories as $category) {
+            $category->addArrayExtension('meta', [
+                'products' => $loader->products($category->getId()),
+            ]);
+        }
+
+        return $categories;
+    }
+}
+
+class MetaLoader
+{
+    public function __construct(private readonly Container $container)
+    {
+    }
+
+    public function products(string $categoryId): array
+    {
+        return $this->container->get(Connection::class)
+            ->fetchFirstColumn(
+                'SELECT LOWER(HEX(product_id)) FROM product_category WHERE category_id = :categoryId',
+                ['categoryId' => Uuid::fromHexToBytes($categoryId)]
+            );
+    }
+}
+
 class Main extends BaseScript
 {
     public function run()
     {
         $time = microtime(true); $memory = memory_get_usage();
 
-        $criteria = new Criteria();
-        $criteria->setLimit(250);
+        $categories = (new CategoryLoader($this->container))->load();
 
-        $categories = $this->getContainer()
-            ->get('category.repository')
-            ->search($criteria, Context::createCLIContext())
-            ->getEntities();
-
-        foreach ($categories as $category) {
-            $count = $this->getContainer()
-                ->get(Connection::class)
-                ->fetchOne(
-                    'SELECT COUNT(*) FROM product_category_tree WHERE category_id = :id',
-                    ['id' => Uuid::fromHexToBytes($category->getId())]
-                );
-
-            /** @var Entity $product */
-            $category->addArrayExtension('meta', ['count' => $count]);
-        }
+        $categories = array_slice($categories->getElements(), 0, 20);
 
         $output = new SymfonyStyle(new ArrayInput([]), new ConsoleOutput());
 
         $table = $output->createTable();
 
-        $table->setHeaders(['Name', 'Product count']);
+        $table->setHeaders(['Name', 'Product count', 'Has media']);
 
+        /** @var CategoryEntity $category */
         foreach ($categories as $category) {
             $ids = $category->getExtension('meta')->all();
 
-            $table->addRow([$category->getName(), $ids['count']]);
+            $table->addRow([$category->getName(), count($ids['products']), $category->getMedia() !== null]);
         }
 
         $table->render();
@@ -63,7 +95,6 @@ class Main extends BaseScript
             sprintf('Fetched %s categories and calculated product count for each in %s consuming %s MB', count($categories), round(microtime(true) - $time, 6), round((memory_get_usage()-$memory) / 1024 / 1024, 2))
         );
     }
-
 }
 
 
